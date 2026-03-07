@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.venv/
+venv/
+
+# Build
+build/
+dist/
+*.spec
+*.icns
+*.ico
+icon.png
+icon.iconset/
+installer.iss
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
