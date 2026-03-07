@@ -166,8 +166,9 @@ SETUP_HTML = """<!DOCTYPE html>
 
     if (result.all_ok) {
       statusIcon.textContent = '✅';
-      setMsg('Hệ thống đã sẵn sàng! Đang mở ứng dụng...', 'ok');
-      setTimeout(() => pywebview.api.proceed(), 1000);
+      setMsg('Hệ thống sẵn sàng. Đang kiểm tra cập nhật...', 'ok');
+      canWork = true;
+      await startUpdateCheck();
     } else if (result.can_work) {
       statusIcon.textContent = '⚠️';
       const names = missingItems.length > 0 ? missingItems.join(', ') : 'ffmpeg (system)';
