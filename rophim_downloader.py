@@ -64,12 +64,45 @@ def _validate_url(url: str) -> str:
     return url
 
 
+def _get_extra_paths() -> list[str]:
+    """Đường dẫn phổ biến chứa ffmpeg — macOS/Linux + Windows."""
+    paths = [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/snap/bin",
+        os.path.expanduser("~/bin"),
+    ]
+    if sys.platform == "win32":
+        paths.extend([
+            os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"),
+                         "chocolatey", "bin"),
+            os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"),
+                         "ffmpeg", "bin"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""),
+                         "Microsoft", "WinGet", "Links"),
+            os.path.join(os.environ.get("USERPROFILE", ""),
+                         "scoop", "shims"),
+            r"C:\ffmpeg\bin",
+        ])
+    return [p for p in paths if p]
+
+
 def _get_ffmpeg_path() -> str:
-    """Tìm ffmpeg: system PATH → imageio-ffmpeg → bundled (PyInstaller) → raise."""
+    """Tìm ffmpeg: system PATH → common paths → imageio-ffmpeg → bundled (PyInstaller) → raise."""
     # 1. System PATH
     system = shutil.which("ffmpeg")
     if system:
         return system
+    # 1b. Common paths (bundled app may have limited PATH)
+    suffixes = ["", ".exe"] if sys.platform == "win32" else [""]
+    for d in _get_extra_paths():
+        for suffix in suffixes:
+            candidate = os.path.join(d, "ffmpeg" + suffix)
+            if os.path.isfile(candidate):
+                if sys.platform != "win32" and not os.access(candidate, os.X_OK):
+                    continue
+                return candidate
     # 2. imageio-ffmpeg (hoạt động cả dev lẫn frozen)
     try:
         import imageio_ffmpeg

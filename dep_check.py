@@ -61,18 +61,62 @@ def _check_package(import_name: str) -> tuple[bool, str | None]:
         return False, None
 
 
+# Các đường dẫn phổ biến chứa ffmpeg/brew — macOS/Linux + Windows
+def _get_extra_paths() -> list[str]:
+    paths = [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/snap/bin",
+        os.path.expanduser("~/bin"),
+    ]
+    if sys.platform == "win32":
+        paths.extend([
+            os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"),
+                         "chocolatey", "bin"),
+            os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"),
+                         "ffmpeg", "bin"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""),
+                         "Microsoft", "WinGet", "Links"),
+            os.path.join(os.environ.get("USERPROFILE", ""),
+                         "scoop", "shims"),
+            r"C:\ffmpeg\bin",
+        ])
+    return [p for p in paths if p]
+
+
+def _find_executable(name: str) -> str | None:
+    """Tìm executable: shutil.which trước, sau đó quét đường dẫn phổ biến."""
+    found = shutil.which(name)
+    if found:
+        return found
+    # Trên Windows cần thêm .exe
+    suffixes = ["", ".exe"] if sys.platform == "win32" else [""]
+    for d in _get_extra_paths():
+        for suffix in suffixes:
+            candidate = os.path.join(d, name + suffix)
+            if os.path.isfile(candidate):
+                if sys.platform != "win32" and not os.access(candidate, os.X_OK):
+                    continue
+                return candidate
+    return None
+
+
 def has_system_ffmpeg() -> bool:
-    """Kiểm tra ffmpeg có trong system PATH."""
-    return shutil.which("ffmpeg") is not None
+    """Kiểm tra ffmpeg có trong system PATH hoặc đường dẫn phổ biến."""
+    return _find_executable("ffmpeg") is not None
 
 
 def _get_ffmpeg_version() -> str | None:
     """Lấy version ffmpeg từ system."""
+    ffmpeg_bin = _find_executable("ffmpeg")
+    if not ffmpeg_bin:
+        return None
     try:
         result = subprocess.run(
-            ["ffmpeg", "-version"], capture_output=True, text=True, timeout=5
+            [ffmpeg_bin, "-version"], capture_output=True, text=True, timeout=5
         )
-        first_line = result.stdout.split("\\n")[0] if result.stdout else ""
+        first_line = result.stdout.split("\n")[0] if result.stdout else ""
         # "ffmpeg version 7.1 Copyright ..."
         parts = first_line.split()
         if len(parts) >= 3:
@@ -191,7 +235,8 @@ def install_ffmpeg() -> tuple[bool, str]:
 
     if system == "Darwin":
         # macOS — Homebrew
-        if not shutil.which("brew"):
+        brew_bin = _find_executable("brew")
+        if not brew_bin:
             # Cài Homebrew trước
             try:
                 subprocess.run(
@@ -200,12 +245,16 @@ def install_ffmpeg() -> tuple[bool, str]:
                     check=True, timeout=300,
                     capture_output=True,
                 )
+                brew_bin = _find_executable("brew")
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                return False, "Khong the cai Homebrew. Hay cai thu cong: https://brew.sh"
+                pass
+
+        if not brew_bin:
+            return False, "Khong the tim Homebrew. Hay cai thu cong: https://brew.sh"
 
         try:
             subprocess.run(
-                ["brew", "install", "ffmpeg"],
+                [brew_bin, "install", "ffmpeg"],
                 check=True, timeout=600,
                 capture_output=True,
             )
@@ -215,10 +264,11 @@ def install_ffmpeg() -> tuple[bool, str]:
 
     elif system == "Windows":
         # Windows — winget hoặc choco
-        if shutil.which("winget"):
+        winget_bin = _find_executable("winget")
+        if winget_bin:
             try:
                 subprocess.run(
-                    ["winget", "install", "Gyan.FFmpeg",
+                    [winget_bin, "install", "Gyan.FFmpeg",
                      "--accept-source-agreements", "--accept-package-agreements"],
                     check=True, timeout=600,
                     capture_output=True,
@@ -227,10 +277,11 @@ def install_ffmpeg() -> tuple[bool, str]:
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 pass
 
-        if shutil.which("choco"):
+        choco_bin = _find_executable("choco")
+        if choco_bin:
             try:
                 subprocess.run(
-                    ["choco", "install", "ffmpeg", "-y"],
+                    [choco_bin, "install", "ffmpeg", "-y"],
                     check=True, timeout=600,
                     capture_output=True,
                 )
