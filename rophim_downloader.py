@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 import m3u8
 import requests
+import urllib3
 import yt_dlp
 from requests.adapters import HTTPAdapter
 from tqdm import tqdm
@@ -39,8 +40,10 @@ ROPHIM_PATTERN = re.compile(
 
 def _build_session():
     """Tạo requests.Session với retry adapter và connection pooling."""
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     session = requests.Session()
     session.headers.update(HEADERS)
+    session.verify = False
     retry = Retry(
         total=3,
         backoff_factor=1,
@@ -62,13 +65,24 @@ def _validate_url(url: str) -> str:
 
 
 def _get_ffmpeg_path() -> str:
-    """Tìm ffmpeg: system PATH → imageio-ffmpeg → raise."""
+    """Tìm ffmpeg: system PATH → imageio-ffmpeg → bundled (PyInstaller) → raise."""
+    # 1. System PATH
     system = shutil.which("ffmpeg")
     if system:
         return system
+    # 2. PyInstaller bundled
+    if getattr(sys, "frozen", False):
+        base = sys._MEIPASS  # type: ignore[attr-defined]
+        for name in ("ffmpeg", "ffmpeg.exe"):
+            candidate = os.path.join(base, name)
+            if os.path.isfile(candidate):
+                return candidate
+    # 3. imageio-ffmpeg
     try:
         import imageio_ffmpeg
-        return imageio_ffmpeg.get_ffmpeg_exe()
+        path = imageio_ffmpeg.get_ffmpeg_exe()
+        if path and os.path.isfile(path):
+            return path
     except ImportError:
         pass
     raise FileNotFoundError(
@@ -89,11 +103,13 @@ def download_with_ytdlp(
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> bool:
     """Tải video bằng yt-dlp Python API (hỗ trợ 1000+ trang web)."""
-    ffmpeg_dir: str | None = None
+    ffmpeg_path: str | None = None
     try:
-        ffmpeg_dir = os.path.dirname(_get_ffmpeg_path())
+        ffmpeg_path = _get_ffmpeg_path()
     except FileNotFoundError:
         pass
+
+    has_ffmpeg = ffmpeg_path is not None
 
     last_pct: list[float] = [0.0]  # dùng list để mutate trong closure
 
@@ -109,17 +125,26 @@ def download_with_ytdlp(
         elif d.get("status") == "finished":
             log("Tải xong, đang xử lý...")
 
+    # Nếu có ffmpeg: tải best video + best audio rồi merge → chất lượng cao nhất
+    # Nếu không có ffmpeg: tải best single-file format (không cần merge)
+    if has_ffmpeg:
+        fmt = "bestvideo+bestaudio/best"
+    else:
+        fmt = "best[ext=mp4]/best"
+        log("Cảnh báo: Không tìm thấy ffmpeg, chất lượng có thể bị giới hạn.")
+
     ydl_opts: dict[str, object] = {
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "format": fmt,
         "merge_output_format": "mp4",
         "noplaylist": True,
         "outtmpl": output,
         "progress_hooks": [progress_hook],
         "quiet": True,
         "no_warnings": True,
+        "abort_on_error": False,
     }
-    if ffmpeg_dir:
-        ydl_opts["ffmpeg_location"] = ffmpeg_dir
+    if ffmpeg_path:
+        ydl_opts["ffmpeg_location"] = os.path.dirname(ffmpeg_path)
 
     log("Đang thử tải bằng yt-dlp...")
     try:
@@ -213,9 +238,17 @@ def find_m3u8_url(
     return m3u8_url
 
 
+def _load_m3u8(url: str) -> m3u8.M3U8:
+    """Tải và parse m3u8 playlist, bỏ qua lỗi SSL certificate."""
+    session = _build_session()
+    resp = session.get(url, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return m3u8.loads(resp.text, uri=url)
+
+
 def choose_best_stream(master_url: str) -> str:
     """Chọn stream có bandwidth cao nhất từ master playlist."""
-    playlist = m3u8.load(master_url, headers=HEADERS)
+    playlist = _load_m3u8(master_url)
 
     if not playlist.playlists:
         return master_url
@@ -254,7 +287,7 @@ def download_hls_parallel(
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> None:
     """Tải video HLS song song nhiều segment, merge bằng ffmpeg."""
-    playlist = m3u8.load(m3u8_url, headers=HEADERS)
+    playlist = _load_m3u8(m3u8_url)
     base = m3u8_url.rsplit("/", 1)[0]
 
     # Các pattern quảng cáo cần lọc bỏ
