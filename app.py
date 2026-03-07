@@ -11,6 +11,7 @@ import threading
 
 import webview  # type: ignore[import-untyped]
 
+from dep_check import check_deps, install_ffmpeg, install_missing_packages
 from rophim_downloader import download_single_url
 
 
@@ -25,6 +26,197 @@ def _get_default_save_dir() -> str:
 
 DEFAULT_SAVE_DIR = _get_default_save_dir()
 
+# ── Setup Screen HTML ──────────────────────────────────────────
+SETUP_HTML = """<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>Video Downloader - Setup</title>
+<style>
+  :root {
+    --bg: #1e1e2e; --surface: #313244; --overlay: #45475a;
+    --text: #cdd6f4; --dim: #6c7086; --accent: #89b4fa;
+    --success: #a6e3a1; --error: #f38ba8; --warn: #fab387;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+    height: 100vh; padding: 40px;
+    user-select: none; -webkit-user-select: none;
+  }
+  .setup-box {
+    background: var(--surface); border-radius: 16px;
+    padding: 36px 40px; max-width: 500px; width: 100%;
+    text-align: center;
+  }
+  h1 { font-size: 24px; margin-bottom: 8px; }
+  .subtitle { color: var(--dim); font-size: 14px; margin-bottom: 24px; }
+  .status-icon { font-size: 48px; margin-bottom: 16px; }
+  .dep-list {
+    text-align: left; margin: 16px 0; padding: 16px;
+    background: var(--bg); border-radius: var(--radius);
+  }
+  .dep-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0; font-size: 14px;
+  }
+  .dep-item .icon { font-size: 18px; width: 24px; text-align: center; }
+  .dep-item .name { flex: 1; }
+  .dep-item .tag {
+    font-size: 11px; padding: 2px 8px; border-radius: 4px;
+    font-weight: 600;
+  }
+  .tag-ok { background: #a6e3a133; color: var(--success); }
+  .tag-miss { background: #f38ba833; color: var(--error); }
+  .tag-bundle { background: #fab38733; color: var(--warn); }
+  .msg { color: var(--dim); font-size: 13px; margin: 16px 0; line-height: 1.5; }
+  .msg.installing { color: var(--accent); }
+  .msg.error { color: var(--error); }
+  .msg.ok { color: var(--success); }
+  button {
+    font-family: inherit; font-size: 14px; font-weight: 600;
+    border: none; border-radius: var(--radius); cursor: pointer;
+    padding: 12px 28px; margin: 6px; transition: all 0.15s;
+  }
+  button:active { transform: scale(0.97); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+  .btn-install { background: var(--accent); color: var(--bg); }
+  .btn-install:hover:not(:disabled) { filter: brightness(1.1); }
+  .btn-skip { background: var(--overlay); color: var(--text); }
+  .btn-skip:hover:not(:disabled) { background: var(--dim); }
+  .spinner {
+    display: inline-block; width: 20px; height: 20px;
+    border: 3px solid var(--overlay); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+    vertical-align: middle; margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="setup-box">
+  <div class="status-icon" id="statusIcon">⚙️</div>
+  <h1>Kiểm tra hệ thống</h1>
+  <p class="subtitle">Đang kiểm tra các thành phần cần thiết...</p>
+
+  <div class="dep-list" id="depList"></div>
+
+  <div class="msg" id="msgBox"></div>
+
+  <div id="btnBox" style="display:none">
+    <button class="btn-install" id="btnInstall" onclick="doInstall()">📦 Cài đặt</button>
+    <button class="btn-skip" id="btnSkip" onclick="doSkip()">Bỏ qua</button>
+  </div>
+</div>
+
+<script>
+  const depList = document.getElementById('depList');
+  const msgBox = document.getElementById('msgBox');
+  const btnBox = document.getElementById('btnBox');
+  const btnInstall = document.getElementById('btnInstall');
+  const btnSkip = document.getElementById('btnSkip');
+  const statusIcon = document.getElementById('statusIcon');
+
+  function renderDeps(deps) {
+    depList.innerHTML = '';
+    for (const d of deps) {
+      const item = document.createElement('div');
+      item.className = 'dep-item';
+      let icon, tagText, tagClass;
+      if (d.status === 'ok') { icon = '✅'; tagText = 'OK'; tagClass = 'tag-ok'; }
+      else if (d.status === 'bundled') { icon = '📦'; tagText = 'Bundled'; tagClass = 'tag-bundle'; }
+      else { icon = '❌'; tagText = 'Thiếu'; tagClass = 'tag-miss'; }
+      item.innerHTML = '<span class="icon">' + icon + '</span>'
+        + '<span class="name">' + d.name + (d.note ? ' <small style="color:var(--dim)">(' + d.note + ')</small>' : '') + '</span>'
+        + '<span class="tag ' + tagClass + '">' + tagText + '</span>';
+      depList.appendChild(item);
+    }
+  }
+
+  function setMsg(text, cls) {
+    msgBox.textContent = text;
+    msgBox.className = 'msg' + (cls ? ' ' + cls : '');
+  }
+
+  let missingItems = [];
+
+  window.addEventListener('pywebviewready', async () => {
+    const result = await pywebview.api.run_check();
+    renderDeps(result.deps);
+    missingItems = result.missing || [];
+
+    if (result.all_ok) {
+      statusIcon.textContent = '✅';
+      setMsg('Hệ thống đã sẵn sàng! Đang mở ứng dụng...', 'ok');
+      setTimeout(() => pywebview.api.proceed(), 1000);
+    } else if (result.can_work) {
+      statusIcon.textContent = '⚠️';
+      const names = missingItems.length > 0 ? missingItems.join(', ') : 'ffmpeg (system)';
+      setMsg('Khuyến nghị cài: ' + names + ' để đạt chất lượng tốt nhất.\\nHoặc bỏ qua để dùng phiên bản tích hợp.', '');
+      btnInstall.textContent = '📦 Cài đặt ' + (missingItems.length > 0 ? '(' + missingItems.length + ')' : '');
+      // Nếu chỉ thiếu system ffmpeg
+      if (missingItems.length === 0 && !result.has_system_ffmpeg) {
+        missingItems = ['ffmpeg'];
+        btnInstall.textContent = '📦 Cài ffmpeg hệ thống';
+      }
+      btnBox.style.display = 'block';
+    } else {
+      statusIcon.textContent = '❌';
+      const names = missingItems.join(', ');
+      setMsg('Thiếu các thành phần bắt buộc: ' + names, 'error');
+      btnInstall.textContent = '📦 Cài đặt (' + missingItems.length + ')';
+      btnBox.style.display = 'block';
+      btnSkip.style.display = 'none';
+    }
+  });
+
+  let pollTimer = null;
+  function startPollInstall() {
+    pollTimer = setInterval(async () => {
+      const u = await pywebview.api.poll_install();
+      if (!u) return;
+      if (u.status === 'installing') {
+        setMsg(u.msg, 'installing');
+      } else if (u.status === 'done') {
+        clearInterval(pollTimer);
+        statusIcon.textContent = '✅';
+        setMsg(u.msg, 'ok');
+        const result = await pywebview.api.run_check();
+        renderDeps(result.deps);
+        setTimeout(() => pywebview.api.proceed(), 1500);
+      } else if (u.status === 'error') {
+        clearInterval(pollTimer);
+        statusIcon.textContent = '❌';
+        setMsg(u.msg, 'error');
+        btnInstall.disabled = false;
+        btnSkip.style.display = 'inline-block';
+      }
+    }, 300);
+  }
+
+  async function doInstall() {
+    btnInstall.disabled = true;
+    btnSkip.style.display = 'none';
+    statusIcon.textContent = '⏳';
+    const count = missingItems.length;
+    msgBox.innerHTML = '<div class="spinner" style="display:inline-block"></div> Dang cai dat ' + count + ' thanh phan, vui long cho...';
+    msgBox.className = 'msg installing';
+    startPollInstall();
+    await pywebview.api.do_install(missingItems);
+  }
+
+  function doSkip() {
+    pywebview.api.proceed();
+  }
+</script>
+</body>
+</html>
+"""
+
+# ── Main App HTML ──────────────────────────────────────────────
 HTML = """<!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -366,20 +558,122 @@ class Api:
         self._downloading = False
 
 
+APP_TITLE = "Video Downloader"
+
+
+class SetupApi:
+    """API cho màn hình kiểm tra dependencies."""
+
+    def __init__(self) -> None:
+        self._window: webview.Window | None = None
+        self._install_updates: list[dict[str, str]] = []
+        self._lock = threading.Lock()
+
+    def run_check(self) -> dict[str, object]:
+        result = check_deps()
+        deps = []
+        for pkg in result["packages"]:
+            dep: dict[str, str] = {"name": pkg["display"]}
+            if pkg["status"] == "ok":
+                note = pkg.get("note", "")
+                ver = pkg.get("version")
+                if ver:
+                    note = f"v{ver}" if not note else f"{note}, v{ver}"
+                dep["status"] = "ok"
+                dep["note"] = note or ""
+            elif pkg["status"] == "bundled":
+                dep["status"] = "bundled"
+                dep["note"] = "chat luong co the bi gioi han"
+            elif pkg["status"] == "optional":
+                dep["status"] = "bundled"
+                dep["note"] = "tuy chon"
+            else:
+                dep["status"] = "missing"
+                dep["note"] = ""
+            deps.append(dep)
+
+        all_ok = result["optimal"] and result["ready"]
+        can_work = result["ready"]
+        missing = result["missing_required"]
+
+        return {
+            "deps": deps,
+            "all_ok": all_ok,
+            "can_work": can_work,
+            "missing": missing,
+            "has_system_ffmpeg": result["has_system_ffmpeg"],
+            "has_bundled_ffmpeg": result["has_bundled_ffmpeg"],
+        }
+
+    def do_install(self, items: list[str] | None = None) -> None:
+        def _worker() -> None:
+            to_install = items or []
+            total = len(to_install)
+            done = 0
+            errors = []
+
+            for item in to_install:
+                done += 1
+                with self._lock:
+                    self._install_updates.append(
+                        {"status": "installing",
+                         "msg": f"[{done}/{total}] Dang cai {item}..."})
+
+                if item == "ffmpeg":
+                    ok, msg = install_ffmpeg()
+                    if not ok:
+                        errors.append(f"ffmpeg: {msg}")
+                else:
+                    ok, msg = install_missing_packages([item])
+                    if not ok:
+                        errors.append(f"{item}: {msg}")
+
+            with self._lock:
+                if errors:
+                    self._install_updates.append(
+                        {"status": "error",
+                         "msg": "Loi: " + "; ".join(errors)})
+                else:
+                    self._install_updates.append(
+                        {"status": "done",
+                         "msg": f"Da cai dat thanh cong {total} thanh phan!"})
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def poll_install(self) -> dict[str, str] | None:
+        with self._lock:
+            if self._install_updates:
+                return self._install_updates.pop(0)
+        return None
+
+    def proceed(self) -> None:
+        """Chuyển sang màn hình chính."""
+        if self._window:
+            api = Api()
+            self._window.load_html(HTML)
+            self._window.resize(800, 650)
+            self._window._js_api = api  # type: ignore[attr-defined]
+            self._window.expose(
+                api.get_save_dir,
+                api.choose_folder,
+                api.start_download,
+                api.stop_download,
+                api.poll_updates,
+            )
+
+
 def main() -> None:
-    api = Api()
-    _window = webview.create_window(
+    setup_api = SetupApi()
+    window = webview.create_window(
         APP_TITLE,
-        html=HTML,
-        js_api=api,
-        width=800,
-        height=650,
-        min_size=(600, 500),
+        html=SETUP_HTML,
+        js_api=setup_api,
+        width=520,
+        height=480,
+        min_size=(520, 480),
     )
+    setup_api._window = window
     webview.start(debug=False)
 
-
-APP_TITLE = "Video Downloader"
 
 if __name__ == "__main__":
     main()

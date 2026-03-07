@@ -70,21 +70,28 @@ def _get_ffmpeg_path() -> str:
     system = shutil.which("ffmpeg")
     if system:
         return system
-    # 2. PyInstaller bundled
-    if getattr(sys, "frozen", False):
-        base = sys._MEIPASS  # type: ignore[attr-defined]
-        for name in ("ffmpeg", "ffmpeg.exe"):
-            candidate = os.path.join(base, name)
-            if os.path.isfile(candidate):
-                return candidate
-    # 3. imageio-ffmpeg
+    # 2. imageio-ffmpeg (hoạt động cả dev lẫn frozen)
     try:
         import imageio_ffmpeg
         path = imageio_ffmpeg.get_ffmpeg_exe()
         if path and os.path.isfile(path):
             return path
-    except ImportError:
+    except (ImportError, Exception):
         pass
+    # 3. PyInstaller bundled — tìm trong toàn bộ thư mục app
+    if getattr(sys, "frozen", False):
+        # onedir: thư mục chứa executable; onefile: sys._MEIPASS
+        search_dirs = []
+        if hasattr(sys, "_MEIPASS"):
+            search_dirs.append(sys._MEIPASS)  # type: ignore[attr-defined]
+        search_dirs.append(os.path.dirname(sys.executable))
+        for base in search_dirs:
+            for root, _dirs, files in os.walk(base):
+                for f in files:
+                    if f.startswith("ffmpeg") and not f.endswith(".py"):
+                        candidate = os.path.join(root, f)
+                        if os.access(candidate, os.X_OK):
+                            return candidate
     raise FileNotFoundError(
         "Không tìm thấy ffmpeg. "
         "macOS: brew install ffmpeg | Windows: choco install ffmpeg"
@@ -109,8 +116,6 @@ def download_with_ytdlp(
     except FileNotFoundError:
         pass
 
-    has_ffmpeg = ffmpeg_path is not None
-
     last_pct: list[float] = [0.0]  # dùng list để mutate trong closure
 
     def progress_hook(d: dict[str, object]) -> None:
@@ -125,30 +130,35 @@ def download_with_ytdlp(
         elif d.get("status") == "finished":
             log("Tải xong, đang xử lý...")
 
-    # Nếu có ffmpeg: tải best video + best audio rồi merge → chất lượng cao nhất
-    # Nếu không có ffmpeg: tải best single-file format (không cần merge)
-    if has_ffmpeg:
-        fmt = "bestvideo+bestaudio/best"
-    else:
-        fmt = "best[ext=mp4]/best"
-        log("Cảnh báo: Không tìm thấy ffmpeg, chất lượng có thể bị giới hạn.")
-
-    ydl_opts: dict[str, object] = {
-        "format": fmt,
-        "merge_output_format": "mp4",
-        "noplaylist": True,
-        "outtmpl": output,
-        "progress_hooks": [progress_hook],
-        "quiet": True,
-        "no_warnings": True,
-        "abort_on_error": False,
-    }
-    if ffmpeg_path:
-        ydl_opts["ffmpeg_location"] = os.path.dirname(ffmpeg_path)
+    def _build_opts(fmt: str) -> dict[str, object]:
+        opts: dict[str, object] = {
+            "format": fmt,
+            "merge_output_format": "mp4",
+            "noplaylist": True,
+            "outtmpl": output,
+            "progress_hooks": [progress_hook],
+            "quiet": True,
+            "no_warnings": True,
+        }
+        if ffmpeg_path:
+            opts["ffmpeg_location"] = os.path.dirname(ffmpeg_path)
+        return opts
 
     log("Đang thử tải bằng yt-dlp...")
+
+    # Lần 1: Thử chất lượng cao nhất (cần ffmpeg để merge video+audio)
+    if ffmpeg_path:
+        try:
+            with yt_dlp.YoutubeDL(_build_opts("bestvideo+bestaudio/best")) as ydl:  # type: ignore[arg-type]
+                ydl.download([url])
+            log(f"Hoàn thành: {output}")
+            return True
+        except Exception:
+            log("Không thể merge video+audio, thử tải single format...")
+
+    # Lần 2: Fallback single-file format có cả video+audio (không cần ffmpeg merge)
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:  # type: ignore[arg-type]
+        with yt_dlp.YoutubeDL(_build_opts("best[vcodec!=none][acodec!=none]/best")) as ydl:  # type: ignore[arg-type]
             ydl.download([url])
         log(f"Hoàn thành: {output}")
         return True
