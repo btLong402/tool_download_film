@@ -72,7 +72,7 @@ SETUP_HTML = """<!DOCTYPE html>
   .tag-ok { background: #a6e3a133; color: var(--success); }
   .tag-miss { background: #f38ba833; color: var(--error); }
   .tag-bundle { background: #fab38733; color: var(--warn); }
-  .msg { color: var(--dim); font-size: 13px; margin: 16px 0; line-height: 1.5; }
+  .msg { color: var(--dim); font-size: 13px; margin: 16px 0; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
   .msg.installing { color: var(--accent); }
   .msg.error { color: var(--error); }
   .msg.ok { color: var(--success); }
