@@ -26,7 +26,7 @@ def _generate_icon() -> str | None:
     try:
         from PIL import Image, ImageDraw
     except ImportError:
-        print("⚠ Không có Pillow, bỏ qua tạo icon. (pip install Pillow)")
+        print("[WARN] Khong co Pillow, bo qua tao icon. (pip install Pillow)")
         return None
 
     # Tạo icon 1024x1024
@@ -69,14 +69,14 @@ def _generate_icon() -> str | None:
         img.save(os.path.join(iconset, "icon_512x512@2x.png"))
         subprocess.run(["iconutil", "-c", "icns", iconset, "-o", "icon.icns"], check=True)
         shutil.rmtree(iconset, ignore_errors=True)
-        print("✅ Tạo icon.icns")
+        print("[OK] Tao icon.icns")
         return "icon.icns"
     else:
         # Windows/Linux: tạo .ico
         ico_sizes = [img.resize((s, s), Image.LANCZOS) for s in [16, 32, 48, 64, 128, 256]]
         ico_sizes[0].save("icon.ico", format="ICO", sizes=[(s, s) for s in [16, 32, 48, 64, 128, 256]],
                           append_images=ico_sizes[1:])
-        print("✅ Tạo icon.ico")
+        print("[OK] Tao icon.ico")
         return "icon.ico"
 
 
@@ -89,7 +89,7 @@ def _create_dmg(app_path: str) -> str:
     if os.path.exists(dmg_path):
         os.remove(dmg_path)
 
-    print(f"\nĐang tạo {dmg_name}...")
+    print(f"\nCreating {dmg_name}...")
 
     # Tạo temporary DMG staging folder
     staging = os.path.join("dist", "dmg_staging")
@@ -115,7 +115,7 @@ def _create_dmg(app_path: str) -> str:
     ], check=True)
 
     shutil.rmtree(staging, ignore_errors=True)
-    print(f"✅ DMG: {dmg_path}")
+    print(f"[OK] DMG: {dmg_path}")
     return dmg_path
 
 
@@ -153,7 +153,7 @@ Filename: "{{app}}\\{APP_NAME}.exe"; Description: "Launch {APP_NAME}"; Flags: no
     iss_path = "installer.iss"
     with open(iss_path, "w") as f:
         f.write(iss_content)
-    print(f"✅ Tạo {iss_path} (dùng Inno Setup để build installer)")
+    print(f"[OK] Tao {iss_path} (dung Inno Setup de build installer)")
     return iss_path
 
 
@@ -173,7 +173,7 @@ def main() -> None:
         ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe()
         ffmpeg_dir = os.path.dirname(ffmpeg_bin)
     except ImportError:
-        print("Lỗi: Chưa cài imageio-ffmpeg. Chạy: pip install imageio-ffmpeg")
+        print("Error: imageio-ffmpeg not installed. Run: pip install imageio-ffmpeg")
         sys.exit(1)
 
     # ── Xây dựng lệnh PyInstaller ──────────────────────────────
@@ -235,19 +235,19 @@ def main() -> None:
     # Entry point
     cmd.append("app.py")
 
-    print("Lệnh build:")
+    print("Build command:")
     print(" ".join(cmd))
     print()
 
     result = subprocess.run(cmd)
     if result.returncode != 0:
-        print(f"\nBuild thất bại (exit code {result.returncode}).")
+        print(f"\nBuild failed (exit code {result.returncode}).")
         sys.exit(1)
 
     # ── Kết quả ────────────────────────────────────────────────
     print()
     print("=" * 50)
-    print("✅ Build thành công!")
+    print("[OK] Build thanh cong!")
 
     if system == "Darwin":
         app_path = f"dist/{app_name}.app"
@@ -256,23 +256,23 @@ def main() -> None:
         dmg_path = _create_dmg(app_path)
         print()
         print("=" * 50)
-        print(f"📦 Release file: {dmg_path}")
-        print(f"   Người dùng chỉ cần mở .dmg và kéo app vào Applications.")
+        print(f"[INFO] Release file: {dmg_path}")
+        print(f"   Drag the app to Applications to install.")
     elif system == "Windows":
         print(f"   App: dist\\{app_name}.exe")
         _create_windows_installer_script()
         # Nếu có Inno Setup, tự động build installer
         iscc = shutil.which("iscc") or shutil.which("ISCC")
         if iscc:
-            print("\nĐang tạo installer...")
+            print("\nCreating installer...")
             subprocess.run([iscc, "installer.iss"], check=True)
-            print(f"📦 Release file: dist/{app_name}-{APP_VERSION}-Windows-Setup.exe")
+            print(f"[INFO] Release file: dist/{app_name}-{APP_VERSION}-Windows-Setup.exe")
         else:
             print()
-            print("Để tạo installer:")
-            print("  1. Cài Inno Setup: https://jrsoftware.org/isintl.php")
-            print("  2. Chạy: iscc installer.iss")
-            print(f"  → Kết quả: dist/{app_name}-{APP_VERSION}-Windows-Setup.exe")
+            print("To create installer:")
+            print("  1. Install Inno Setup: https://jrsoftware.org/isintl.php")
+            print("  2. Run: iscc installer.iss")
+            print(f"  -> Output: dist/{app_name}-{APP_VERSION}-Windows-Setup.exe")
     else:
         print(f"   App: dist/{app_name}")
 
