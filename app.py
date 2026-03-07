@@ -399,6 +399,7 @@ HTML = """<!DOCTYPE html>
   <label style="margin:0">Lưu vào:</label>
   <span class="folder-path" id="folderPath"></span>
   <button class="btn-folder" onclick="chooseFolder()">📁 Chọn folder</button>
+  <button class="btn-folder" onclick="openFolder()">📂 Mở folder</button>
 </div>
 
 <div class="btn-row">
@@ -464,6 +465,10 @@ HTML = """<!DOCTYPE html>
   async function chooseFolder() {
     const dir = await pywebview.api.choose_folder();
     if (dir) folderPath.textContent = dir;
+  }
+
+  async function openFolder() {
+    await pywebview.api.open_folder();
   }
 
   async function startDownload() {
@@ -537,6 +542,16 @@ class Api:
             self._save_dir = result[0]
             return self._save_dir
         return None
+
+    def open_folder(self) -> None:
+        path = self._save_dir
+        os.makedirs(path, exist_ok=True)
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        elif sys.platform == "win32":
+            subprocess.Popen(["explorer", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
 
     def stop_download(self) -> None:
         self._stop_flag = True
