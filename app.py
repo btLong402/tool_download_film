@@ -94,6 +94,16 @@ SETUP_HTML = """<!DOCTYPE html>
     vertical-align: middle; margin-right: 8px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .update-box {
+    text-align: left; margin: 12px 0; padding: 14px 16px;
+    background: var(--bg); border-radius: var(--radius);
+    border-left: 3px solid var(--accent);
+  }
+  .update-version { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .update-notes {
+    font-size: 12px; color: var(--dim); max-height: 72px;
+    overflow-y: auto; margin-top: 6px; white-space: pre-wrap;
+  }
 </style>
 </head>
 <body>
@@ -103,12 +113,13 @@ SETUP_HTML = """<!DOCTYPE html>
   <p class="subtitle">Đang kiểm tra các thành phần cần thiết...</p>
 
   <div class="dep-list" id="depList"></div>
+  <div class="update-box" id="updateBox" style="display:none"></div>
 
   <div class="msg" id="msgBox"></div>
 
   <div id="btnBox" style="display:none">
-    <button class="btn-install" id="btnInstall" onclick="doInstall()">📦 Cài đặt</button>
-    <button class="btn-skip" id="btnSkip" onclick="doSkip()">Bỏ qua</button>
+    <button class="btn-install" id="btnInstall">📦 Cài đặt</button>
+    <button class="btn-skip" id="btnSkip">Bỏ qua</button>
   </div>
 </div>
 
@@ -119,6 +130,10 @@ SETUP_HTML = """<!DOCTYPE html>
   const btnInstall = document.getElementById('btnInstall');
   const btnSkip = document.getElementById('btnSkip');
   const statusIcon = document.getElementById('statusIcon');
+  const updateBox = document.getElementById('updateBox');
+
+  btnInstall.onclick = doInstall;
+  btnSkip.onclick = doSkip;
 
   function renderDeps(deps) {
     depList.innerHTML = '';
@@ -142,6 +157,7 @@ SETUP_HTML = """<!DOCTYPE html>
   }
 
   let missingItems = [];
+  let canWork = false;
 
   window.addEventListener('pywebviewready', async () => {
     const result = await pywebview.api.run_check();
@@ -173,6 +189,52 @@ SETUP_HTML = """<!DOCTYPE html>
     }
   });
 
+  // ── Kiểm tra cập nhật ────────────────────────────────────────
+  async function startUpdateCheck() {
+    updateBox.style.display = 'none';
+    await pywebview.api.start_update_check();
+    const pollUpdate = setInterval(async () => {
+      const u = await pywebview.api.poll_update_check();
+      if (u === null || u === undefined) return;
+      clearInterval(pollUpdate);
+      if (u.available) {
+        showUpdatePanel(u);
+      } else {
+        statusIcon.textContent = '✅';
+        setMsg('Hệ thống sẵn sàng, đang vào ứng dụng...', 'ok');
+        setTimeout(() => pywebview.api.proceed(), 1200);
+      }
+    }, 500);
+  }
+
+  function showUpdatePanel(info) {
+    statusIcon.textContent = '🆕';
+    updateBox.innerHTML =
+      '<div class="update-version">Phiên bản mới: <span style="color:var(--accent)">v' + info.latest + '</span>'
+      + ' <small style="color:var(--dim);font-weight:400">(hiện tại: v' + info.current + ')</small></div>'
+      + (info.notes ? '<div class="update-notes">' + info.notes + '</div>' : '');
+    updateBox.style.display = 'block';
+    setMsg('Có bản cập nhật mới!', '');
+    btnInstall.textContent = '⬆ Cập nhật ngay';
+    btnInstall.onclick = () => doUpdate(info.download_url, info.release_url);
+    btnInstall.disabled = false;
+    btnSkip.style.display = 'inline-block';
+    btnSkip.textContent = 'Bỏ qua';
+    btnSkip.onclick = () => pywebview.api.proceed();
+    btnBox.style.display = 'block';
+  }
+
+  async function doUpdate(downloadUrl, releaseUrl) {
+    btnInstall.disabled = true;
+    btnSkip.style.display = 'none';
+    statusIcon.textContent = '⏳';
+    msgBox.innerHTML = '<div class="spinner" style="display:inline-block"></div> Đang tải bản cập nhật...';
+    msgBox.className = 'msg installing';
+    startPollInstall();
+    await pywebview.api.do_download_install(downloadUrl, releaseUrl);
+  }
+
+  // ── Cài đặt deps ─────────────────────────────────────────────
   let pollTimer = null;
   function startPollInstall() {
     pollTimer = setInterval(async () => {
@@ -180,13 +242,17 @@ SETUP_HTML = """<!DOCTYPE html>
       if (!u) return;
       if (u.status === 'installing') {
         setMsg(u.msg, 'installing');
+      } else if (u.status === 'ready') {
+        clearInterval(pollTimer);
+        setMsg(u.msg || 'Đang mở cài đặt...', 'ok');
+        await pywebview.api.install_now(u.path);
       } else if (u.status === 'done') {
         clearInterval(pollTimer);
         statusIcon.textContent = '✅';
         setMsg(u.msg, 'ok');
         const result = await pywebview.api.run_check();
         renderDeps(result.deps);
-        setTimeout(() => pywebview.api.proceed(), 1500);
+        setTimeout(() => startUpdateCheck(), 1200);
       } else if (u.status === 'error') {
         clearInterval(pollTimer);
         statusIcon.textContent = '❌';
@@ -202,14 +268,18 @@ SETUP_HTML = """<!DOCTYPE html>
     btnSkip.style.display = 'none';
     statusIcon.textContent = '⏳';
     const count = missingItems.length;
-    msgBox.innerHTML = '<div class="spinner" style="display:inline-block"></div> Dang cai dat ' + count + ' thanh phan, vui long cho...';
+    msgBox.innerHTML = '<div class="spinner" style="display:inline-block"></div> Đang cài đặt ' + count + ' thành phần, vui lòng chờ...';
     msgBox.className = 'msg installing';
     startPollInstall();
     await pywebview.api.do_install(missingItems);
   }
 
   function doSkip() {
-    pywebview.api.proceed();
+    if (canWork) {
+      startUpdateCheck();
+    } else {
+      pywebview.api.proceed();
+    }
   }
 </script>
 </body>
@@ -568,6 +638,8 @@ class SetupApi:
         self._window: webview.Window | None = None
         self._install_updates: list[dict[str, str]] = []
         self._lock = threading.Lock()
+        self._update_result: dict | None = None
+        self._update_checking: bool = False
 
     def run_check(self) -> dict[str, object]:
         result = check_deps()
@@ -644,6 +716,101 @@ class SetupApi:
             if self._install_updates:
                 return self._install_updates.pop(0)
         return None
+
+    def start_update_check(self) -> None:
+        """Bắt đầu kiểm tra bản cập nhật mới trên GitHub (background)."""
+        self._update_result = None
+        self._update_checking = True
+
+        def _worker() -> None:
+            from updater import check_update
+            try:
+                result = check_update(timeout=10)
+            except Exception:
+                result = {
+                    "available": False, "current": "", "latest": "",
+                    "download_url": "", "release_url": "", "notes": "",
+                }
+            self._update_result = result
+            self._update_checking = False
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def poll_update_check(self) -> dict | None:
+        """Trả None nếu đang kiểm tra, dict khi có kết quả."""
+        if self._update_checking:
+            return None
+        return self._update_result
+
+    def do_download_install(self, download_url: str, release_url: str = "") -> None:
+        """Tải bản cập nhật về và mở installer."""
+        def _worker() -> None:
+            import platform as _plat
+            import subprocess as _sub
+
+            if not download_url:
+                # Không có file trực tiếp — mở trang release trên trình duyệt
+                if release_url:
+                    system = _plat.system()
+                    if system == "Darwin":
+                        _sub.Popen(["open", release_url])
+                    elif system == "Windows":
+                        _sub.Popen(["start", "", release_url], shell=True)
+                    else:
+                        _sub.Popen(["xdg-open", release_url])
+                with self._lock:
+                    self._install_updates.append({
+                        "status": "error",
+                        "msg": "Khong co file tai truc tiep.\nTrang GitHub Releases da duoc mo - vui long tai thu cong.",
+                    })
+                return
+
+            try:
+                from updater import download_update
+
+                def _progress(pct: int) -> None:
+                    with self._lock:
+                        self._install_updates.append({
+                            "status": "installing",
+                            "msg": f"Dang tai ban cap nhat... {pct}%",
+                        })
+
+                path = download_update(download_url, _progress)
+                with self._lock:
+                    self._install_updates.append({
+                        "status": "ready",
+                        "path": path,
+                        "msg": "Tai xong! Dang mo cai dat va thoat ung dung...",
+                    })
+            except Exception as e:
+                with self._lock:
+                    self._install_updates.append({
+                        "status": "error",
+                        "msg": f"Loi tai cap nhat: {e}",
+                    })
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def install_now(self, path: str) -> None:
+        """Mở file installer rồi đóng app hiện tại."""
+        import platform as _plat
+        import subprocess as _sub
+
+        system = _plat.system()
+        if system == "Darwin":
+            _sub.Popen(["open", path])
+        elif system == "Windows":
+            _sub.Popen([path])
+        else:
+            _sub.Popen(["xdg-open", path])
+
+        def _close() -> None:
+            import time
+            time.sleep(0.8)
+            if self._window:
+                self._window.destroy()
+
+        threading.Thread(target=_close, daemon=True).start()
 
     def proceed(self) -> None:
         """Chuyển sang màn hình chính."""

@@ -14,8 +14,9 @@ import shutil
 import subprocess
 import sys
 
+from version import APP_VERSION  # nguon duy nhat quan ly version
+
 APP_NAME = "Video Downloader"
-APP_VERSION = "1.0.0"
 BUNDLE_ID = "com.videodownloader.app"
 
 
