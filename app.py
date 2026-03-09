@@ -6,6 +6,7 @@ Nhập nhiều link, tải lần lượt. Chọn folder lưu.
 
 import os
 import re
+import subprocess
 import sys
 import threading
 
@@ -830,7 +831,12 @@ class SetupApi:
 
     def proceed(self) -> None:
         """Chuyển sang màn hình chính."""
-        if self._window:
+        if not self._window:
+            return
+
+        def _do_load() -> None:
+            import time
+            time.sleep(0.1)  # đợi pywebview trả callback về JS trước
             api = Api()
             self._window.load_html(HTML)
             self._window.resize(800, 650)
@@ -842,6 +848,8 @@ class SetupApi:
                 api.stop_download,
                 api.poll_updates,
             )
+
+        threading.Thread(target=_do_load, daemon=True).start()
 
 
 def main() -> None:
